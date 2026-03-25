@@ -1,0 +1,15 @@
+venv/
+venv13/
+__pycache__/
+*.pyc
+
+data/*.csv
+data/*.db
+
+.env
+
+mlruns/
+
+.ipynb_checkpoints/
+
+.DS_Store
