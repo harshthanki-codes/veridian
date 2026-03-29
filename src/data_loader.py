@@ -1,7 +1,9 @@
 import os
 import sqlite3
 import pandas as pd
+
 from src.preprocessing import preprocess
+from src.model_trainer import run_training
 
 DATA_DIR = "data"
 TRANSACTION_FILE = os.path.join(DATA_DIR, "train_transaction.csv")
@@ -11,6 +13,10 @@ DB_PATH = os.path.join(DATA_DIR, "veridian.db")
 
 def reduce_memory(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
+        # guard against duplicate column edge cases
+        if not isinstance(df[col], pd.Series):
+            continue
+
         col_type = df[col].dtype
 
         if col_type != "object":
@@ -22,11 +28,12 @@ def reduce_memory(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_data() -> pd.DataFrame:
+def build_database():
     conn = sqlite3.connect(DB_PATH)
 
-    # transactions → DB
+    print("Loading transactions...")
     for i, chunk in enumerate(pd.read_csv(TRANSACTION_FILE, chunksize=50000)):
+        print(f"Transaction chunk {i+1}")
         chunk = reduce_memory(chunk)
         chunk.to_sql(
             "transactions",
@@ -35,8 +42,9 @@ def load_data() -> pd.DataFrame:
             index=False,
         )
 
-    # identity → DB
+    print("Loading identity...")
     for i, chunk in enumerate(pd.read_csv(IDENTITY_FILE, chunksize=50000)):
+        print(f"Identity chunk {i+1}")
         chunk = reduce_memory(chunk)
         chunk.to_sql(
             "identity",
@@ -45,16 +53,24 @@ def load_data() -> pd.DataFrame:
             index=False,
         )
 
-    # SQL join (safe, no RAM spike)
-    query = """
-        SELECT t.*, i.*
+    conn.close()
+
+
+def load_sample_data(limit: int = 100000) -> pd.DataFrame:
+    conn = sqlite3.connect(DB_PATH)
+
+    print(f"Loading {limit} rows from DB...")
+
+    # avoid duplicate column explosion
+    query = f"""
+        SELECT t.*, i.DeviceType, i.DeviceInfo
         FROM transactions t
         LEFT JOIN identity i
         ON t.TransactionID = i.TransactionID
+        LIMIT {limit}
     """
 
     df = pd.read_sql(query, conn)
-
     conn.close()
 
     df = reduce_memory(df)
@@ -62,22 +78,21 @@ def load_data() -> pd.DataFrame:
     return df
 
 
-def query_data(limit: int = 5) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH)
-
-    query = f"SELECT * FROM transactions LIMIT {limit}"
-    df = pd.read_sql(query, conn)
-
-    conn.close()
-    return df
-
-
 if __name__ == "__main__":
-    df = load_data()
+    # build DB only once
+    if not os.path.exists(DB_PATH):
+        build_database()
+
+    # load manageable sample
+    df = load_sample_data(limit=100000)
     print(f"Loaded data shape: {df.shape}")
 
+    # preprocessing
     X_train, X_val, X_test, y_train, y_val, y_test = preprocess(df)
 
     print("Train:", X_train.shape)
     print("Validation:", X_val.shape)
     print("Test:", X_test.shape)
+
+    # baseline model training
+    model = run_training(X_train, X_val, y_train, y_val)
