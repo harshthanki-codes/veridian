@@ -61,7 +61,6 @@ def load_sample_data(limit: int = 100000) -> pd.DataFrame:
 
     print(f"Loading {limit} rows from DB...")
 
-    # avoid duplicate column explosion
     query = f"""
         SELECT t.*, i.DeviceType, i.DeviceInfo
         FROM transactions t
@@ -83,9 +82,12 @@ if __name__ == "__main__":
     if not os.path.exists(DB_PATH):
         build_database()
 
-    # load manageable sample
+    # load sample
     df = load_sample_data(limit=100000)
     print(f"Loaded data shape: {df.shape}")
+
+    # IMPORTANT: capture feature names before preprocessing (before scaling)
+    feature_names = df.drop(columns=["isFraud"]).columns
 
     # preprocessing
     X_train, X_val, X_test, y_train, y_val, y_test = preprocess(df)
@@ -94,5 +96,11 @@ if __name__ == "__main__":
     print("Validation:", X_val.shape)
     print("Test:", X_test.shape)
 
-    # baseline model training
-    model = run_training(X_train, X_val, y_train, y_val)
+    # training + feature importance
+    model = run_training(
+        X_train,
+        X_val,
+        y_train,
+        y_val,
+        feature_names
+    )
