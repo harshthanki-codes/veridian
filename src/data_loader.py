@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import pandas as pd
+import joblib
 
 from src.preprocessing import preprocess
 from src.model_trainer import run_training
@@ -13,7 +14,6 @@ DB_PATH = os.path.join(DATA_DIR, "veridian.db")
 
 def reduce_memory(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
-        # guard against duplicate column edge cases
         if not isinstance(df[col], pd.Series):
             continue
 
@@ -73,34 +73,35 @@ def load_sample_data(limit: int = 100000) -> pd.DataFrame:
     conn.close()
 
     df = reduce_memory(df)
-
     return df
 
 
 if __name__ == "__main__":
-    # build DB only once
+
+    os.makedirs("models", exist_ok=True)
+
     if not os.path.exists(DB_PATH):
         build_database()
 
-    # load sample
-    df = load_sample_data(limit=100000)
+    df = load_sample_data()
+
     print(f"Loaded data shape: {df.shape}")
 
-    # IMPORTANT: capture feature names before preprocessing (before scaling)
-    feature_names = df.drop(columns=["isFraud"]).columns
+    # 🔥 FIX: SAVE FEATURE COLUMNS BEFORE PREPROCESS
+    feature_columns = df.drop(columns=["isFraud"]).columns.tolist()
+    joblib.dump(feature_columns, "models/feature_columns.pkl")
 
-    # preprocessing
+    # PREPROCESS
     X_train, X_val, X_test, y_train, y_val, y_test = preprocess(df)
 
     print("Train:", X_train.shape)
     print("Validation:", X_val.shape)
     print("Test:", X_test.shape)
 
-    # training + feature importance
-    model = run_training(
-        X_train,
-        X_val,
-        y_train,
-        y_val,
-        feature_names
-    )
+    # TRAIN MODEL
+    model = run_training(X_train, X_val, y_train, y_val)
+
+    # SAVE MODEL
+    joblib.dump(model, "models/xgb_model.pkl")
+
+    print("✅ Model and feature columns saved successfully!")
