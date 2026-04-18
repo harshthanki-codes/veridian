@@ -65,7 +65,6 @@ st.sidebar.header("⚙️ Settings")
 
 mode = st.sidebar.selectbox("Choose Input", ["Sample Data", "Manual Input"])
 
-# 🔥 NEW: Threshold slider
 threshold = st.sidebar.slider("Fraud Threshold", 0.0, 1.0, 0.3)
 
 # ---------------- SAMPLE MODE ----------------
@@ -77,7 +76,7 @@ if mode == "Sample Data":
     sample = df.iloc[[idx]].copy()
 
     st.write("### 🧾 Transaction Overview")
-    st.dataframe(sample[AVAILABLE_DISPLAY_COLS], use_container_width=True)
+    st.dataframe(sample[AVAILABLE_DISPLAY_COLS], width="stretch")
 
     if st.button("🔍 Predict", key="sample_predict"):
 
@@ -86,15 +85,14 @@ if mode == "Sample Data":
         X = encode_categoricals(X)
         X = align_features(X, feature_columns)
 
-        prob = model.predict_proba(X)[0][1]
+        prob = float(model.predict_proba(X)[0][1])  # ✅ FIXED float issue
 
-        st.subheader("📢 Result")
+        st.subheader("📢 Prediction Result")
 
         col1, col2 = st.columns(2)
 
         with col1:
-            # 🔥 FIXED: better probability display
-            st.metric("Fraud Probability", f"{prob:.6f}")
+            st.metric("Fraud Probability", f"{prob:.6f} ({prob:.2%})")
 
         with col2:
             if prob > threshold:
@@ -102,17 +100,20 @@ if mode == "Sample Data":
             else:
                 st.success("✅ Legitimate Transaction")
 
-        # 🔥 NEW: Risk Interpretation
+        # ---------------- PROGRESS BAR ----------------
+        st.progress(min(max(prob, 0.0), 1.0))  # ✅ SAFE float
+
+        # ---------------- RISK LEVEL ----------------
         st.subheader("📊 Risk Level")
 
         if prob < 0.1:
-            st.success("Very Low Risk")
+            st.success("🟢 Very Low Risk")
         elif prob < 0.3:
-            st.info("Low Risk")
+            st.info("🔵 Low Risk")
         elif prob < 0.6:
-            st.warning("Medium Risk")
+            st.warning("🟠 Medium Risk")
         else:
-            st.error("High Risk 🚨")
+            st.error("🔴 High Risk 🚨")
 
 
 # ---------------- MANUAL MODE ----------------
@@ -148,14 +149,14 @@ else:
         X = encode_categoricals(X)
         X = align_features(X, feature_columns)
 
-        prob = model.predict_proba(X)[0][1]
+        prob = float(model.predict_proba(X)[0][1])  # ✅ FIXED
 
-        st.subheader("📢 Result")
+        st.subheader("📢 Prediction Result")
 
         col1, col2 = st.columns(2)
 
         with col1:
-            st.metric("Fraud Probability", f"{prob:.6f}")
+            st.metric("Fraud Probability", f"{prob:.6f} ({prob:.2%})")
 
         with col2:
             if prob > threshold:
@@ -163,14 +164,17 @@ else:
             else:
                 st.success("✅ Legitimate Transaction")
 
-        # 🔥 Risk Interpretation
+        # ---------------- PROGRESS BAR ----------------
+        st.progress(min(max(prob, 0.0), 1.0))  # ✅ FIXED
+
+        # ---------------- RISK LEVEL ----------------
         st.subheader("📊 Risk Level")
 
         if prob < 0.1:
-            st.success("Very Low Risk")
+            st.success("🟢 Very Low Risk")
         elif prob < 0.3:
-            st.info("Low Risk")
+            st.info("🔵 Low Risk")
         elif prob < 0.6:
-            st.warning("Medium Risk")
+            st.warning("🟠 Medium Risk")
         else:
-            st.error("High Risk 🚨")
+            st.error("🔴 High Risk 🚨")
