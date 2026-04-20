@@ -5,6 +5,7 @@ import mlflow
 import mlflow.xgboost
 import skops.io as sio
 import joblib
+import xgboost as xgb
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -132,15 +133,29 @@ def run_training(X_train, X_val, y_train, y_val):
 
         mlflow.xgboost.log_model(xgb_model, name="model")
 
-        # save for dashboard
+        # =========================
+        # 🔥 IMPORTANT FIX (SHAP SUPPORT)
+        # =========================
         os.makedirs("models", exist_ok=True)
+
+        # Save sklearn model (for prediction)
         joblib.dump(xgb_model, "models/xgb_model.pkl")
 
-        # feature importance (safe)
+        # 🔥 Save booster (for SHAP)
+        booster = xgb_model.get_booster()
+        booster.save_model("models/xgb_booster.json")
+
+        # Save feature names properly
         try:
+            feature_names = list(X_train.columns)
+        except:
             feature_names = [f"f{i}" for i in range(X_train.shape[1])]
-            show_feature_importance(xgb_model, feature_names)
-        except Exception:
-            pass
+
+        joblib.dump(feature_names, "models/feature_columns.pkl")
+
+        # Feature importance
+        show_feature_importance(xgb_model, feature_names)
+
+    print("\n✅ Model + Booster + Features saved successfully!")
 
     return xgb_model
