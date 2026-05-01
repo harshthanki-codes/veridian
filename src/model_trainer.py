@@ -1,9 +1,7 @@
 import os
 import tempfile
+import importlib
 import pandas as pd
-import mlflow
-import mlflow.xgboost
-import skops.io as sio
 import joblib
 import xgboost as xgb
 
@@ -11,6 +9,15 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, classification_report
 from xgboost import XGBClassifier
+
+
+def _require_module(module_name):
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ImportError(
+            f"Missing optional dependency '{module_name}'. Install project requirements first."
+        ) from exc
 
 
 # ---------------- MODELS ----------------
@@ -86,6 +93,9 @@ def show_feature_importance(model, feature_names, top_n=20):
 
 # ---------------- SAFE LOGGING ----------------
 def log_sklearn_model_safe(model, model_name):
+    mlflow = _require_module("mlflow")
+    sio = _require_module("skops.io")
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         path = os.path.join(tmp_dir, f"{model_name}.skops")
         sio.dump(model, path)
@@ -94,6 +104,8 @@ def log_sklearn_model_safe(model, model_name):
 
 # ---------------- MAIN TRAINING ----------------
 def run_training(X_train, X_val, y_train, y_val):
+    mlflow = _require_module("mlflow")
+    mlflow_xgboost = _require_module("mlflow.xgboost")
 
     mlflow.set_experiment("fraud_detection")
 
@@ -131,7 +143,7 @@ def run_training(X_train, X_val, y_train, y_val):
         mlflow.log_param("model", "XGBoost")
         mlflow.log_metric("auc", auc)
 
-        mlflow.xgboost.log_model(xgb_model, name="model")
+        mlflow_xgboost.log_model(xgb_model, name="model")
 
         # =========================
         # 🔥 IMPORTANT FIX (SHAP SUPPORT)
