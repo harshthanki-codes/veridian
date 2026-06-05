@@ -1,133 +1,60 @@
-import os
-import sqlite3
 import pandas as pd
-import joblib
+import sqlite3
+import numpy as np
+from pathlib import Path
 
-from src.preprocessing import preprocess
-from src.model_trainer import run_training
-
-DATA_DIR = "data"
-TRANSACTION_FILE = os.path.join(DATA_DIR, "train_transaction.csv")
-IDENTITY_FILE = os.path.join(DATA_DIR, "train_identity.csv")
-DB_PATH = os.path.join(DATA_DIR, "veridian.db")
+DATA_DIR = Path(__file__).parent.parent / "data"
+DB_PATH = DATA_DIR / "veridian.db"
+CHUNK_SIZE = 50_000
 
 
-# =====================================================
-# MEMORY REDUCTION
-# =====================================================
-def reduce_memory(df: pd.DataFrame) -> pd.DataFrame:
-    for col in df.columns:
-        col_type = df[col].dtype
-
-        if col_type == "float64":
-            df[col] = df[col].astype("float32")
-
-        elif col_type == "int64":
-            df[col] = df[col].astype("int32")
-
+def _downcast(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.select_dtypes(include=["float64"]).columns:
+        df[col] = pd.to_numeric(df[col], downcast="float")
+    for col in df.select_dtypes(include=["int64"]).columns:
+        df[col] = pd.to_numeric(df[col], downcast="integer")
     return df
 
 
-# =====================================================
-# BUILD SQLITE DATABASE (CHUNK BASED)
-# =====================================================
-def build_database():
+def load_transactions_to_db(path: Path = DATA_DIR / "train_transaction.csv") -> None:
     conn = sqlite3.connect(DB_PATH)
-
-    print("Building database...")
-
-    # -------- Transactions --------
-    for i, chunk in enumerate(pd.read_csv(TRANSACTION_FILE, chunksize=50000)):
-        print(f"Transaction chunk {i+1}")
-
-        chunk = reduce_memory(chunk)
-
-        chunk.to_sql(
-            "transactions",
-            conn,
-            if_exists="replace" if i == 0 else "append",
-            index=False
-        )
-
-    # -------- Identity --------
-    for i, chunk in enumerate(pd.read_csv(IDENTITY_FILE, chunksize=50000)):
-        print(f"Identity chunk {i+1}")
-
-        chunk = reduce_memory(chunk)
-
-        chunk.to_sql(
-            "identity",
-            conn,
-            if_exists="replace" if i == 0 else "append",
-            index=False
-        )
-
+    first = True
+    for chunk in pd.read_csv(path, chunksize=CHUNK_SIZE, low_memory=False):
+        chunk = _downcast(chunk)
+        chunk.to_sql("transactions", conn, if_exists="replace" if first else "append", index=False)
+        first = False
+        print(f"Loaded {CHUNK_SIZE} rows...")
     conn.close()
-    print("✅ Database built successfully!")
+    print(f"Transactions written to {DB_PATH}")
 
 
-# =====================================================
-# LOAD SAMPLE DATA (SAFE)
-# =====================================================
-def load_sample_data(limit: int = 30000) -> pd.DataFrame:
+def load_identity_to_db(path: Path = DATA_DIR / "train_identity.csv") -> None:
     conn = sqlite3.connect(DB_PATH)
+    first = True
+    for chunk in pd.read_csv(path, chunksize=CHUNK_SIZE, low_memory=False):
+        chunk = _downcast(chunk)
+        chunk.to_sql("identity", conn, if_exists="replace" if first else "append", index=False)
+        first = False
+    conn.close()
+    print(f"Identity written to {DB_PATH}")
 
-    print(f"Loading {limit} rows from DB...")
 
-    query = f"""
-        SELECT t.*, i.DeviceType, i.DeviceInfo
+def load_merged() -> pd.DataFrame:
+    """SQL join avoids loading both full DataFrames into memory simultaneously."""
+    conn = sqlite3.connect(DB_PATH)
+    query = """
+        SELECT t.*, i.*
         FROM transactions t
-        LEFT JOIN identity i
-        ON t.TransactionID = i.TransactionID
-        LIMIT {limit}
+        LEFT JOIN identity i ON t.TransactionID = i.TransactionID
     """
-
     df = pd.read_sql(query, conn)
     conn.close()
-
-    # -------- Reduce memory --------
-    df = reduce_memory(df)
-
-    # -------- DROP HEAVY COLUMNS (VERY IMPORTANT) --------
-    # V columns are huge and mostly unnecessary
-    v_cols = [col for col in df.columns if col.startswith("V")]
-    df = df.drop(columns=v_cols[:200], errors="ignore")
-
+    # Drop duplicate TransactionID from identity side
+    df = df.loc[:, ~df.columns.duplicated()]
     return df
 
 
-# =====================================================
-# MAIN EXECUTION
-# =====================================================
 if __name__ == "__main__":
-
-    os.makedirs("models", exist_ok=True)
-
-    # Build DB if not exists
-    if not os.path.exists(DB_PATH):
-        build_database()
-
-    # Load data safely
-    df = load_sample_data(limit=30000)
-
-    print(f"Loaded data shape: {df.shape}")
-
-    # -------- PREPROCESS --------
-    X_train, X_val, X_test, y_train, y_val, y_test = preprocess(df)
-
-    print("Train:", X_train.shape)
-    print("Validation:", X_val.shape)
-    print("Test:", X_test.shape)
-
-    # -------- SAVE FEATURE COLUMNS (FIXED) --------
-    try:
-        feature_columns = list(X_train.columns)
-    except:
-        feature_columns = [f"f{i}" for i in range(X_train.shape[1])]
-
-    joblib.dump(feature_columns, "models/feature_columns.pkl")
-
-    # -------- TRAIN MODEL --------
-    model = run_training(X_train, X_val, y_train, y_val)
-
-    print("✅ Everything completed successfully!")
+    load_transactions_to_db()
+    load_identity_to_db()
+    print("Ingestion complete.")

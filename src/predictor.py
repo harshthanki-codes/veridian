@@ -1,33 +1,26 @@
-import joblib
-import pandas as pd
-
-MODEL_PATH = "models/xgb_model.pkl"
-FEATURE_PATH = "models/feature_columns.pkl"
-
-model = joblib.load(MODEL_PATH)
-feature_columns = joblib.load(FEATURE_PATH)
-
-
-def encode_categoricals(df):
-    df = df.copy()
-    for col in df.select_dtypes(include=["object"]).columns:
-        df[col] = df[col].astype("category").cat.codes
-    return df
+"""
+Thin CLI wrapper around api/predictor.py.
+Use api/predictor.py directly when importing from FastAPI routes.
+"""
+import json
+import argparse
+from api.predictor import predict, predict_with_explanation
 
 
-def align_features(df):
-    df = df.copy()
+def main():
+    parser = argparse.ArgumentParser(description="Run a single fraud prediction from CLI")
+    parser.add_argument("--input", required=True, help="JSON string of transaction fields")
+    parser.add_argument("--explain", action="store_true", help="Include SHAP explanations")
+    args = parser.parse_args()
 
-    for col in feature_columns:
-        if col not in df.columns:
-            df[col] = 0
+    data = json.loads(args.input)
+    if args.explain:
+        result = predict_with_explanation(data)
+    else:
+        result = predict(data)
 
-    return df[feature_columns]
+    print(json.dumps(result, indent=2, default=str))
 
 
-def predict_transaction(df):
-    df = encode_categoricals(df)
-    df = align_features(df)
-
-    prob = model.predict_proba(df)[0][1]
-    return float(prob)
+if __name__ == "__main__":
+    main()

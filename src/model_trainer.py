@@ -1,173 +1,101 @@
-import os
-import tempfile
-import importlib
+import pickle
+import numpy as np
 import pandas as pd
-import joblib
-import xgboost as xgb
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, classification_report
+import mlflow
+import mlflow.xgboost
+import optuna
+from pathlib import Path
 from xgboost import XGBClassifier
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, classification_report
+from src.data_loader import load_merged
+from src.preprocessing import preprocess, split
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+MODEL_DIR = Path(__file__).parent.parent / "models"
+MODEL_DIR.mkdir(exist_ok=True)
 
 
-def _require_module(module_name):
-    try:
-        return importlib.import_module(module_name)
-    except ImportError as exc:
-        raise ImportError(
-            f"Missing optional dependency '{module_name}'. Install project requirements first."
-        ) from exc
+def _objective(trial, X_train, X_val, y_train, y_val, scale_pos_weight: float):
+    params = {
+        "n_estimators": trial.suggest_int("n_estimators", 300, 1000),
+        "max_depth": trial.suggest_int("max_depth", 4, 9),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "gamma": trial.suggest_float("gamma", 0, 5),
+        "reg_alpha": trial.suggest_float("reg_alpha", 0, 1),
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 5),
+        "scale_pos_weight": scale_pos_weight,
+        "tree_method": "hist",
+        "eval_metric": "aucpr",
+        "random_state": 42,
+    }
+    model = XGBClassifier(**params, early_stopping_rounds=30)
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    preds = model.predict_proba(X_val)[:, 1]
+    return average_precision_score(y_val, preds)
 
 
-# ---------------- MODELS ----------------
-def train_logistic_regression(X_train, y_train):
-    model = LogisticRegression(
-        max_iter=5000,
-        class_weight="balanced",
-        solver="saga",
-        n_jobs=-1,
-        tol=1e-3,
-        random_state=42
+def train(n_trials: int = 50):
+    mlflow.set_experiment("veridian-fraud-detection")
+
+    print("Loading data...")
+    df = load_merged()
+    X, y = preprocess(df)
+    X_train, X_test, y_train, y_test = split(X, y)
+    X_tr, X_val, y_tr, y_val = split(X_train, y_train, test_size=0.15)
+
+    # Class imbalance ratio for scale_pos_weight
+    neg, pos = (y_train == 0).sum(), (y_train == 1).sum()
+    scale_pos_weight = neg / pos
+    print(f"Class ratio: {scale_pos_weight:.1f}x  |  Train: {len(X_tr):,}  Val: {len(X_val):,}  Test: {len(X_test):,}")
+
+    print(f"Running Optuna ({n_trials} trials)...")
+    study = optuna.create_study(direction="maximize")
+    study.optimize(
+        lambda trial: _objective(trial, X_tr, X_val, y_tr, y_val, scale_pos_weight),
+        n_trials=n_trials,
+        show_progress_bar=True,
     )
-    model.fit(X_train, y_train)
-    return model
+
+    best_params = {**study.best_params, "scale_pos_weight": scale_pos_weight, "tree_method": "hist", "random_state": 42}
+    print(f"Best AUC-PR: {study.best_value:.4f}")
+
+    with mlflow.start_run(run_name="xgb-final"):
+        mlflow.log_params(best_params)
+
+        final_model = XGBClassifier(**best_params, early_stopping_rounds=30)
+        final_model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=100)
+
+        proba = final_model.predict_proba(X_test)[:, 1]
+        preds = (proba >= 0.5).astype(int)
+
+        metrics = {
+            "auc_roc": roc_auc_score(y_test, proba),
+            "auc_pr": average_precision_score(y_test, proba),
+            "f1": f1_score(y_test, preds),
+        }
+        mlflow.log_metrics(metrics)
+        mlflow.xgboost.log_model(final_model, "xgb_model")
+
+        print("\n=== Test Set Results ===")
+        for k, v in metrics.items():
+            print(f"  {k}: {v:.4f}")
+        print(classification_report(y_test, preds, target_names=["legit", "fraud"]))
+
+        # Persist artifacts
+        with open(MODEL_DIR / "xgb_model.pkl", "wb") as f:
+            pickle.dump(final_model, f)
+        with open(MODEL_DIR / "feature_columns.pkl", "wb") as f:
+            pickle.dump(list(X.columns), f)
+
+        final_model.save_model(MODEL_DIR / "xgb_booster.json")
+        print(f"\nArtifacts saved to {MODEL_DIR}")
+
+    return final_model, metrics
 
 
-def train_random_forest(X_train, y_train):
-    model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=12,
-        class_weight="balanced",
-        n_jobs=-1,
-        random_state=42
-    )
-    model.fit(X_train, y_train)
-    return model
-
-
-def train_xgboost(X_train, y_train):
-    scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train)
-
-    model = XGBClassifier(
-        n_estimators=300,
-        max_depth=6,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        scale_pos_weight=scale_pos_weight,
-        eval_metric="auc",
-        random_state=42,
-        n_jobs=-1
-    )
-
-    model.fit(X_train, y_train)
-    return model
-
-
-# ---------------- EVALUATION ----------------
-def evaluate_model(model, X_val, y_val):
-    y_pred = model.predict(X_val)
-    y_proba = model.predict_proba(X_val)[:, 1]
-
-    auc = roc_auc_score(y_val, y_proba)
-
-    print(f"AUC-ROC: {auc:.4f}")
-    print(classification_report(y_val, y_pred))
-
-    return auc
-
-
-def show_feature_importance(model, feature_names, top_n=20):
-    if not hasattr(model, "feature_importances_"):
-        return
-
-    feat_imp = pd.DataFrame({
-        "feature": feature_names,
-        "importance": model.feature_importances_
-    }).sort_values(by="importance", ascending=False)
-
-    print("\nTop Features:")
-    print(feat_imp.head(top_n))
-
-
-# ---------------- SAFE LOGGING ----------------
-def log_sklearn_model_safe(model, model_name):
-    mlflow = _require_module("mlflow")
-    sio = _require_module("skops.io")
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        path = os.path.join(tmp_dir, f"{model_name}.skops")
-        sio.dump(model, path)
-        mlflow.log_artifact(path, artifact_path="model")
-
-
-# ---------------- MAIN TRAINING ----------------
-def run_training(X_train, X_val, y_train, y_val):
-    mlflow = _require_module("mlflow")
-    mlflow_xgboost = _require_module("mlflow.xgboost")
-
-    mlflow.set_experiment("fraud_detection")
-
-    # -------- Logistic Regression --------
-    with mlflow.start_run(run_name="Logistic Regression"):
-        print("\nTraining Logistic Regression...")
-
-        lr_model = train_logistic_regression(X_train, y_train)
-        auc = evaluate_model(lr_model, X_val, y_val)
-
-        mlflow.log_param("model", "LogisticRegression")
-        mlflow.log_metric("auc", auc)
-
-        log_sklearn_model_safe(lr_model, "lr_model")
-
-    # -------- Random Forest --------
-    with mlflow.start_run(run_name="Random Forest"):
-        print("\nTraining Random Forest...")
-
-        rf_model = train_random_forest(X_train, y_train)
-        auc = evaluate_model(rf_model, X_val, y_val)
-
-        mlflow.log_param("model", "RandomForest")
-        mlflow.log_metric("auc", auc)
-
-        log_sklearn_model_safe(rf_model, "rf_model")
-
-    # -------- XGBoost (FINAL MODEL) --------
-    with mlflow.start_run(run_name="XGBoost"):
-        print("\nTraining XGBoost...")
-
-        xgb_model = train_xgboost(X_train, y_train)
-        auc = evaluate_model(xgb_model, X_val, y_val)
-
-        mlflow.log_param("model", "XGBoost")
-        mlflow.log_metric("auc", auc)
-
-        mlflow_xgboost.log_model(xgb_model, name="model")
-
-        # =========================
-        # 🔥 IMPORTANT FIX (SHAP SUPPORT)
-        # =========================
-        os.makedirs("models", exist_ok=True)
-
-        # Save sklearn model (for prediction)
-        joblib.dump(xgb_model, "models/xgb_model.pkl")
-
-        # 🔥 Save booster (for SHAP)
-        booster = xgb_model.get_booster()
-        booster.save_model("models/xgb_booster.json")
-
-        # Save feature names properly
-        try:
-            feature_names = list(X_train.columns)
-        except:
-            feature_names = [f"f{i}" for i in range(X_train.shape[1])]
-
-        joblib.dump(feature_names, "models/feature_columns.pkl")
-
-        # Feature importance
-        show_feature_importance(xgb_model, feature_names)
-
-    print("\n✅ Model + Booster + Features saved successfully!")
-
-    return xgb_model
+if __name__ == "__main__":
+    train()

@@ -1,63 +1,30 @@
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-TARGET = "isFraud"
 
 
-def handle_missing(df: pd.DataFrame) -> pd.DataFrame:
-    for col in df.columns:
-        if df[col].dtype == "object":
-            df[col] = df[col].fillna("unknown")
-        else:
-            df[col] = df[col].fillna(df[col].median())
-    return df
+def preprocess(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    df = df.copy()
 
+    # Drop columns with >90% missing — they add noise, not signal
+    threshold = 0.9 * len(df)
+    df = df.dropna(thresh=len(df) - threshold, axis=1)
 
-def encode_categoricals(df: pd.DataFrame) -> pd.DataFrame:
+    target = df.pop("isFraud")
+
+    # Median fill for numeric, -1 for categorical (XGBoost handles this gracefully)
+    for col in df.select_dtypes(include=["float32", "float64", "int32", "int64"]).columns:
+        df[col] = df[col].fillna(df[col].median())
+
     for col in df.select_dtypes(include=["object"]).columns:
-        df[col] = df[col].astype("category").cat.codes
-    return df
+        df[col] = pd.Categorical(df[col]).codes
+
+    # Drop ID columns — no predictive value
+    drop_cols = [c for c in df.columns if "TransactionID" in c or "id_" in c.lower()]
+    df = df.drop(columns=drop_cols, errors="ignore")
+
+    return df, target
 
 
-def split_data(df: pd.DataFrame):
-    X = df.drop(columns=[TARGET])
-    y = df[TARGET]
-
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y,
-        test_size=0.3,
-        stratify=y,
-        random_state=42
-    )
-
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp,
-        test_size=0.5,
-        stratify=y_temp,
-        random_state=42
-    )
-
-    return X_train, X_val, X_test, y_train, y_val, y_test
-
-
-def scale_features(X_train, X_val, X_test):
-    # fit only on train to avoid data leakage
-    scaler = StandardScaler()
-
-    X_train = scaler.fit_transform(X_train)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
-
-    return X_train, X_val, X_test
-
-
-def preprocess(df: pd.DataFrame):
-    df = handle_missing(df)
-    df = encode_categoricals(df)
-
-    X_train, X_val, X_test, y_train, y_val, y_test = split_data(df)
-
-    X_train, X_val, X_test = scale_features(X_train, X_val, X_test)
-
-    return X_train, X_val, X_test, y_train, y_val, y_test
+def split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2, seed: int = 42):
+    return train_test_split(X, y, test_size=test_size, stratify=y, random_state=seed)
