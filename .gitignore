@@ -12,3 +12,5 @@ models/*.json
 .mypy_cache/
 dist/
 *.egg-info/
+strategy/
+config/tenants.json

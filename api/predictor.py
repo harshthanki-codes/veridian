@@ -1,14 +1,20 @@
+from __future__ import annotations
+
 import pickle
+from functools import lru_cache
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import shap
-from pathlib import Path
-from functools import lru_cache
+
+from src.preprocessing import PreprocessingArtifacts, load_preprocessing_artifacts
+from src.tenant_config import TenantConfig
 
 MODEL_DIR = Path(__file__).parent.parent / "models"
-MODEL_VERSION = "xgb-v1.0"
+MODEL_VERSION = "xgb-v1.1"
+PREPROCESSING_PATH = MODEL_DIR / "preprocessing.pkl"
 
-# Risk tiers based on fraud probability
 RISK_TIERS = [
     (0.80, "CRITICAL"),
     (0.50, "HIGH"),
@@ -16,76 +22,110 @@ RISK_TIERS = [
     (0.00, "LOW"),
 ]
 
-DECISION_THRESHOLD = 0.50
+DEFAULT_DECISION_THRESHOLD = 0.50
+
+
+class LegacyPreprocessor:
+    def __init__(self, feature_columns: list[str]):
+        self._artifacts = PreprocessingArtifacts(
+            feature_columns=feature_columns,
+            numeric_fill_values={},
+            categorical_mappings={},
+            dropped_columns=[],
+        )
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        work = df.copy()
+        for column in work.select_dtypes(include="object").columns:
+            work[column] = pd.Categorical(work[column]).codes
+        return work.reindex(columns=self._artifacts.feature_columns, fill_value=np.nan)
+
+    @property
+    def feature_columns(self) -> list[str]:
+        return self._artifacts.feature_columns
 
 
 @lru_cache(maxsize=1)
 def _load_artifacts():
-    with open(MODEL_DIR / "xgb_model.pkl", "rb") as f:
-        model = pickle.load(f)
-    with open(MODEL_DIR / "feature_columns.pkl", "rb") as f:
-        feature_columns = pickle.load(f)
+    with open(MODEL_DIR / "xgb_model.pkl", "rb") as handle:
+        model = pickle.load(handle)
+
+    if PREPROCESSING_PATH.exists():
+        preprocessor: PreprocessingArtifacts | LegacyPreprocessor = load_preprocessing_artifacts(
+            PREPROCESSING_PATH
+        )
+        feature_columns = preprocessor.feature_columns
+    else:
+        with open(MODEL_DIR / "feature_columns.pkl", "rb") as handle:
+            feature_columns = pickle.load(handle)
+        preprocessor = LegacyPreprocessor(feature_columns)
+
     explainer = shap.TreeExplainer(model)
-    return model, feature_columns, explainer
+    return model, preprocessor, feature_columns, explainer
 
 
-def _risk_tier(prob: float) -> str:
+def _risk_tier(probability: float) -> str:
     for threshold, tier in RISK_TIERS:
-        if prob >= threshold:
+        if probability >= threshold:
             return tier
     return "LOW"
 
 
-def _build_feature_vector(data: dict, feature_columns: list) -> pd.DataFrame:
-    df = pd.DataFrame([data])
-    # Encode object columns to category codes, matching training preprocessing
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = pd.Categorical(df[col]).codes
-
-    # Align to training feature set — missing cols become NaN (XGBoost handles this)
-    df = df.reindex(columns=feature_columns, fill_value=np.nan)
-    return df
+def _decision_threshold(tenant: TenantConfig | None) -> float:
+    if tenant is None:
+        return DEFAULT_DECISION_THRESHOLD
+    return tenant.decision_threshold
 
 
-def predict(data: dict) -> dict:
-    model, feature_columns, _ = _load_artifacts()
-    X = _build_feature_vector(data, feature_columns)
+def _build_feature_vector(data: dict) -> pd.DataFrame:
+    _, preprocessor, _, _ = _load_artifacts()
+    frame = pd.DataFrame([data])
+    return preprocessor.transform(frame)
 
-    prob = float(model.predict_proba(X)[0][1])
+
+def predict(data: dict, tenant: TenantConfig | None = None) -> dict:
+    model, _, _, _ = _load_artifacts()
+    X = _build_feature_vector(data)
+    threshold = _decision_threshold(tenant)
+
+    probability = float(model.predict_proba(X)[0][1])
     return {
-        "fraud_probability": round(prob, 6),
-        "is_fraud": prob >= DECISION_THRESHOLD,
-        "risk_tier": _risk_tier(prob),
-        "threshold_used": DECISION_THRESHOLD,
+        "fraud_probability": round(probability, 6),
+        "is_fraud": probability >= threshold,
+        "risk_tier": _risk_tier(probability),
+        "threshold_used": threshold,
         "model_version": MODEL_VERSION,
     }
 
 
-def predict_with_explanation(data: dict) -> dict:
-    model, feature_columns, explainer = _load_artifacts()
-    X = _build_feature_vector(data, feature_columns)
+def predict_with_explanation(data: dict, tenant: TenantConfig | None = None) -> dict:
+    model, _, feature_columns, explainer = _load_artifacts()
+    X = _build_feature_vector(data)
+    threshold = _decision_threshold(tenant)
 
-    prob = float(model.predict_proba(X)[0][1])
+    probability = float(model.predict_proba(X)[0][1])
     shap_values = explainer.shap_values(X)
-
-    # shap_values shape: (1, n_features) for binary XGBoost
-    contributions = shap_values[0] if shap_values.ndim == 2 else shap_values[1][0]
+    contributions = shap_values[0] if getattr(shap_values, "ndim", 1) == 2 else shap_values[1][0]
 
     top_features = sorted(
         [
-            {"feature": col, "shap_value": round(float(val), 6), "feature_value": X[col].iloc[0]}
-            for col, val in zip(feature_columns, contributions)
-            if not np.isnan(val)
+            {
+                "feature": column,
+                "shap_value": round(float(value), 6),
+                "feature_value": X[column].iloc[0],
+            }
+            for column, value in zip(feature_columns, contributions)
+            if not np.isnan(value)
         ],
-        key=lambda x: abs(x["shap_value"]),
+        key=lambda item: abs(item["shap_value"]),
         reverse=True,
     )[:10]
 
     return {
-        "fraud_probability": round(prob, 6),
-        "is_fraud": prob >= DECISION_THRESHOLD,
-        "risk_tier": _risk_tier(prob),
-        "threshold_used": DECISION_THRESHOLD,
+        "fraud_probability": round(probability, 6),
+        "is_fraud": probability >= threshold,
+        "risk_tier": _risk_tier(probability),
+        "threshold_used": threshold,
         "model_version": MODEL_VERSION,
         "top_features": top_features,
     }

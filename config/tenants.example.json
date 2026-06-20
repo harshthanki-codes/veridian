@@ -1,0 +1,12 @@
+{
+  "tenants": [
+    {
+      "tenant_id": "demo-merchant",
+      "display_name": "Demo Merchant",
+      "api_key": "change-me-in-local-config",
+      "decision_threshold": 0.55,
+      "batch_limit": 250,
+      "tags": ["digital-goods", "pilot"]
+    }
+  ]
+}

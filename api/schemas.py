@@ -1,5 +1,9 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal, Optional
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class TransactionRequest(BaseModel):
@@ -51,9 +55,21 @@ class TransactionRequest(BaseModel):
     V4: Optional[float] = Field(None)
     V5: Optional[float] = Field(None)
     V6: Optional[float] = Field(None)
+    client_transaction_id: Optional[str] = Field(
+        None,
+        description="Caller-provided identifier used to correlate external payment events.",
+    )
+    event_timestamp: Optional[datetime] = Field(
+        None,
+        description="When the merchant observed the transaction event.",
+    )
+    metadata: Optional[dict[str, Any]] = Field(
+        None,
+        description="Opaque merchant metadata stored with the scored transaction.",
+    )
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "TransactionAmt": 117.0,
                 "ProductCD": "W",
@@ -63,11 +79,17 @@ class TransactionRequest(BaseModel):
                 "DeviceType": "desktop",
                 "C1": 1.0,
                 "C2": 1.0,
+                "client_transaction_id": "ord_10294",
+                "metadata": {"checkout_source": "web"},
             }
         }
+    }
 
 
 class PredictionResponse(BaseModel):
+    transaction_id: str
+    tenant_id: str
+    request_id: str
     fraud_probability: float = Field(..., description="Model confidence score [0, 1]")
     is_fraud: bool = Field(..., description="True if probability >= threshold")
     risk_tier: str = Field(..., description="LOW | MEDIUM | HIGH | CRITICAL")
@@ -75,10 +97,16 @@ class PredictionResponse(BaseModel):
     model_version: str
 
 
+class ExplanationFeature(BaseModel):
+    feature: str
+    shap_value: float
+    feature_value: float | int | str | None
+
+
 class ExplanationResponse(PredictionResponse):
-    top_features: list[dict] = Field(
+    top_features: list[ExplanationFeature] = Field(
         ...,
-        description="Top 10 SHAP feature contributions, sorted by |impact|",
+        description="Top feature contributions sorted by absolute impact.",
     )
 
 
@@ -86,3 +114,33 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     model_version: str
+    tenant_configured: bool
+
+
+OutcomeStatus = Literal["approved", "declined", "reviewed", "refunded", "disputed", "chargebacked"]
+
+
+class OutcomeUpdateRequest(BaseModel):
+    status: OutcomeStatus
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class OutcomeResponse(BaseModel):
+    transaction_id: str
+    tenant_id: str
+    status: OutcomeStatus
+    notes: Optional[str] = None
+
+
+class TransactionRecordResponse(BaseModel):
+    transaction_id: str
+    tenant_id: str
+    request_id: str
+    client_transaction_id: Optional[str]
+    request_payload: dict[str, Any]
+    prediction_payload: dict[str, Any]
+    explanation_payload: Optional[dict[str, Any]]
+    created_at: str
+    outcome_status: Optional[OutcomeStatus]
+    outcome_notes: Optional[str]
+    outcome_updated_at: Optional[str]

@@ -408,6 +408,9 @@ veridian/
 
 Scores a single transaction and returns:
 
+- `transaction_id`
+- `tenant_id`
+- `request_id`
 - `fraud_probability`
 - `is_fraud`
 - `risk_tier`
@@ -432,6 +435,8 @@ Scores multiple transactions in a single request.
 
 Returns API and model readiness information.
 
+Protected endpoints require an `X-API-Key` header backed by a tenant config. Store a local config at `config/tenants.json` using `config/tenants.example.json` as the template.
+
 ---
 
 ## Example Request
@@ -451,11 +456,14 @@ Returns API and model readiness information.
 
 ```json
 {
+  "transaction_id": "8c6a88ef-9c89-40f0-95bb-84ce7db6e8dc",
+  "tenant_id": "demo-merchant",
+  "request_id": "fef5ab4a7d8f4c7ab760ef40c58bbf03",
   "fraud_probability": 0.823,
   "is_fraud": true,
   "risk_tier": "CRITICAL",
   "threshold_used": 0.5,
-  "model_version": "xgb-v1.0"
+  "model_version": "xgb-v1.1"
 }
 ```
 
@@ -489,6 +497,8 @@ Create a Python 3.11 environment and install dependencies:
 pip install -r requirements.txt
 uvicorn app:app --reload --port 8000
 ```
+
+Before calling protected endpoints, create `config/tenants.json` from `config/tenants.example.json` and replace the demo API key with a real local key.
 
 ---
 
