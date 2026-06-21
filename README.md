@@ -443,12 +443,12 @@ Protected endpoints require an `X-API-Key` header backed by a tenant config. Sto
 
 ```json
 {
-  "TransactionAmt": 117.0,
-  "ProductCD": "W",
-  "card4": "visa",
-  "card6": "debit",
-  "P_emaildomain": "gmail.com",
-  "DeviceType": "desktop"
+"TransactionAmt": 117.0,
+"ProductCD": "W",
+"card4": "visa",
+"card6": "debit",
+"P_emaildomain": "gmail.com",
+"DeviceType": "desktop"
 }
 ```
 
@@ -456,14 +456,14 @@ Protected endpoints require an `X-API-Key` header backed by a tenant config. Sto
 
 ```json
 {
-  "transaction_id": "8c6a88ef-9c89-40f0-95bb-84ce7db6e8dc",
-  "tenant_id": "demo-merchant",
-  "request_id": "fef5ab4a7d8f4c7ab760ef40c58bbf03",
-  "fraud_probability": 0.823,
-  "is_fraud": true,
-  "risk_tier": "CRITICAL",
-  "threshold_used": 0.5,
-  "model_version": "xgb-v1.1"
+"transaction_id": "8c6a88ef-9c89-40f0-95bb-84ce7db6e8dc",
+"tenant_id": "demo-merchant",
+"request_id": "fef5ab4a7d8f4c7ab760ef40c58bbf03",
+"fraud_probability": 0.823,
+"is_fraud": true,
+"risk_tier": "CRITICAL",
+"threshold_used": 0.5,
+"model_version": "xgb-v1.1"
 }
 ```
 
