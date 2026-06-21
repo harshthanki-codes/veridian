@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import shap
 
 from src.preprocessing import PreprocessingArtifacts, load_preprocessing_artifacts
 from src.tenant_config import TenantConfig
@@ -60,8 +59,27 @@ def _load_artifacts():
             feature_columns = pickle.load(handle)
         preprocessor = LegacyPreprocessor(feature_columns)
 
-    explainer = shap.TreeExplainer(model)
-    return model, preprocessor, feature_columns, explainer
+    return model, preprocessor, feature_columns
+
+
+@lru_cache(maxsize=1)
+def _load_explainer():
+    model, _, _ = _load_artifacts()
+    try:
+        import shap
+    except Exception as exc:
+        raise RuntimeError(
+            "SHAP is not available in the current environment. "
+            "Install a SHAP/NumPy-compatible stack to use /predict/explain."
+        ) from exc
+
+    try:
+        return shap.TreeExplainer(model)
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to initialize SHAP explainer. "
+            "This usually means the installed SHAP build is incompatible with the current NumPy version."
+        ) from exc
 
 
 def _risk_tier(probability: float) -> str:
@@ -78,13 +96,13 @@ def _decision_threshold(tenant: TenantConfig | None) -> float:
 
 
 def _build_feature_vector(data: dict) -> pd.DataFrame:
-    _, preprocessor, _, _ = _load_artifacts()
+    _, preprocessor, _ = _load_artifacts()
     frame = pd.DataFrame([data])
     return preprocessor.transform(frame)
 
 
 def predict(data: dict, tenant: TenantConfig | None = None) -> dict:
-    model, _, _, _ = _load_artifacts()
+    model, _, _ = _load_artifacts()
     X = _build_feature_vector(data)
     threshold = _decision_threshold(tenant)
 
@@ -99,7 +117,8 @@ def predict(data: dict, tenant: TenantConfig | None = None) -> dict:
 
 
 def predict_with_explanation(data: dict, tenant: TenantConfig | None = None) -> dict:
-    model, _, feature_columns, explainer = _load_artifacts()
+    model, _, feature_columns = _load_artifacts()
+    explainer = _load_explainer()
     X = _build_feature_vector(data)
     threshold = _decision_threshold(tenant)
 

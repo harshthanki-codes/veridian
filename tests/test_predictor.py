@@ -38,7 +38,7 @@ def test_build_feature_vector_aligns_columns(monkeypatch):
     )
     monkeypatch.setattr(
         "api.predictor._load_artifacts",
-        lambda: (None, artifacts, artifacts.feature_columns, None),
+        lambda: (None, artifacts, artifacts.feature_columns),
     )
 
     data = {"TransactionAmt": 100.0, "ProductCD": "W", "card4": "visa"}
@@ -57,7 +57,7 @@ def test_build_feature_vector_uses_saved_category_mapping(monkeypatch):
     )
     monkeypatch.setattr(
         "api.predictor._load_artifacts",
-        lambda: (None, artifacts, artifacts.feature_columns, None),
+        lambda: (None, artifacts, artifacts.feature_columns),
     )
 
     frame = _build_feature_vector({"ProductCD": "W", "TransactionAmt": 50.0})
@@ -74,7 +74,7 @@ def test_build_feature_vector_unknown_categories_fall_back_to_negative_one(monke
     )
     monkeypatch.setattr(
         "api.predictor._load_artifacts",
-        lambda: (None, artifacts, artifacts.feature_columns, None),
+        lambda: (None, artifacts, artifacts.feature_columns),
     )
 
     frame = _build_feature_vector({"ProductCD": "Z", "TransactionAmt": 50.0})

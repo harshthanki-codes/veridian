@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir \
     xgboost==3.2.0 \
     scikit-learn==1.7.2 \
     shap==0.49.1 \
-    numpy==2.2.6 \
+    "numpy<2" \
     pandas==2.3.3 \
     python-dotenv==1.2.2
 
